@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.venv/
+venv/
+ENV/
+
+# PyInstaller / Build outputs
+build/
+dist/
+*.spec
+
+# Audio / Output test files
+*.mod
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# Local user configuration
+config.json
+selftest_output.mod
