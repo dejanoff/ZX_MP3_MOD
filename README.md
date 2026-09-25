@@ -8,6 +8,10 @@
 
 Специализированный конвертер современных аудиофайлов (**MP3, WAV, FLAC, OGG, M4A**) в классический 4-канальный трекерный формат **ProTracker MOD** (`M.K.`), оптимизированный в первую очередь для аппаратного воспроизведения на ретро-компьютере **ZX Spectrum** с звуковой картой **General Sound (GS)** через плеер **Wild Player**.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="ZX Spectrum MP3 to ProTracker MOD Converter GUI" width="650">
+</p>
+
 ---
 
 ## 💡 Главная идея проекта
