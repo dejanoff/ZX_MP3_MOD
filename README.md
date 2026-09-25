@@ -5,6 +5,7 @@
 [![Target](https://img.shields.io/badge/Target-ZX%20Spectrum%20%2F%20General%20Sound-red.svg)](https://en.wikipedia.org/wiki/General_Sound)
 [![Format](https://img.shields.io/badge/Format-ProTracker%20M.K.-brightgreen.svg)](https://en.wikipedia.org/wiki/MOD_(file_format))
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/dejanoff/ZX_MP3_MOD/releases/tag/v1.1.0)
 [![Release](https://img.shields.io/github/v/release/dejanoff/ZX_MP3_MOD?color=blue)](https://github.com/dejanoff/ZX_MP3_MOD/releases/latest)
 
 Специализированный конвертер современных аудиофайлов (**MP3, WAV, FLAC, OGG, M4A**) в классический 4-канальный трекерный формат **ProTracker MOD** (`M.K.`), оптимизированный в первую очередь для аппаратного воспроизведения на ретро-компьютере **ZX Spectrum** с звуковой картой **General Sound (GS)** через плеер **Wild Player**.
@@ -19,7 +20,7 @@
 
 Для запуска программы **не требуется** устанавливать Python:
 
-👉 **[Скачать MP3toMOD.exe (Windows 64-bit, v1.0.0)](https://github.com/dejanoff/ZX_MP3_MOD/releases/download/v1.0.0/MP3toMOD.exe)** *(~11 МБ)*  
+👉 **[Скачать MP3toMOD.exe (Windows 64-bit, v1.1.0)](https://github.com/dejanoff/ZX_MP3_MOD/releases/download/v1.1.0/MP3toMOD.exe)** *(~11 МБ)*  
 *(Все релизы и обновления доступны на странице [GitHub Releases](https://github.com/dejanoff/ZX_MP3_MOD/releases))*
 
 > ⚠️ **Важно**: Для декодирования аудиоформатов (MP3, FLAC, OGG, M4A и др.) программе требуется **FFmpeg**. Скачайте `ffmpeg.exe` (например, с [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)) и положите его в ту же папку рядом с `MP3toMOD.exe`.

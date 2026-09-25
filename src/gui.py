@@ -13,6 +13,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 from typing import Optional
 
+from .version import __version__
 from .protracker import QUALITY_PRESETS, period_to_frequency
 from .audio import find_ffmpeg, parse_time_str, format_time_str, probe_audio_file
 from .mod_writer import generate_output_mod_path, sanitize_latin_filename
@@ -61,7 +62,7 @@ class ModConverterGUI:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("ZX Spectrum MP3 to ProTracker MOD Converter (General Sound)")
+        self.root.title(f"ZX Spectrum MP3 to ProTracker MOD Converter (General Sound) v{__version__}")
         self.root.geometry("740x700")
         self.root.minsize(640, 600)
 

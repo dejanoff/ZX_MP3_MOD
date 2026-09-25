@@ -12,6 +12,7 @@ import sys
 import argparse
 from typing import Optional
 
+from .version import __version__
 from .audio import find_ffmpeg, parse_time_str, format_time_str
 from .converter import (
     ConversionConfig,
@@ -27,7 +28,7 @@ from .mod_writer import validate_mod_file, generate_output_mod_path
 def run_selftest() -> int:
     """Run built-in self-test using synthetic PCM audio (no FFmpeg needed)."""
     print("=" * 60)
-    print("RUNNING PROTRACKER MOD CONVERTER SELF-TEST")
+    print(f"RUNNING PROTRACKER MOD CONVERTER SELF-TEST v{__version__}")
     print("=" * 60)
 
     test_mod_path = os.path.abspath("selftest_output.mod")
@@ -124,6 +125,12 @@ def main() -> int:
     parser.add_argument("--analyze", action="store_true", help="Estimate resources without converting")
     parser.add_argument("--selftest", action="store_true", help="Run offline self-test and verify output MOD")
     parser.add_argument("--gui", action="store_true", help="Launch interactive graphical interface")
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"MP3toMOD v{__version__} (ZX Spectrum General Sound)",
+        help="Show program's version number and exit",
+    )
 
     args = parser.parse_args()
 
@@ -225,7 +232,7 @@ def main() -> int:
 
     # Execute conversion
     print("=" * 60)
-    print("MP3 TO PROTRACKER MOD CONVERTER")
+    print(f"MP3 TO PROTRACKER MOD CONVERTER v{__version__}")
     print("Target: ZX Spectrum Wild Player + General Sound")
     print("=" * 60)
 
