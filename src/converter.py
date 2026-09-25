@@ -126,18 +126,20 @@ def resolve_quality_and_period(quality_str: str, duration_sec: float, mem_bytes:
             rate = round(period_to_frequency(period))
             # Calculate total PCM size
             total_pcm = int(math.ceil(duration_sec * rate))
-            # Slicing calculation
             row_dur = get_row_duration(DEFAULT_SPEED, DEFAULT_BPM)
             total_rows = int(math.ceil(duration_sec / row_dur))
 
-            # Try 64 rows per chunk, or 128 if needed
-            rows_per_chunk = 64
+            # Slicing calculation: start with safe 32 rows (3.84s) for GS Z80 64KB safety
+            rows_per_chunk = 32
             num_chunks = int(math.ceil(total_rows / rows_per_chunk))
-            chunk_bytes = int(math.ceil(rows_per_chunk * row_dur * rate))
 
+            # If 32 rows exceeds 31 samples, try 64 rows if it safely fits in GS 64KB limit
             if num_chunks > MAX_SAMPLES:
-                if (128 * row_dur * rate) <= MAX_SAMPLE_LENGTH_BYTES:
-                    rows_per_chunk = 128
+                if (65 * row_dur * rate) <= 65534:
+                    rows_per_chunk = 64
+                    num_chunks = int(math.ceil(total_rows / rows_per_chunk))
+                elif (128 * row_dur * rate) <= MAX_SAMPLE_LENGTH_BYTES:
+                    rows_per_chunk = 64
                     num_chunks = int(math.ceil(total_rows / rows_per_chunk))
 
             # Patterns count
@@ -179,17 +181,27 @@ def analyze_conversion(config: ConversionConfig) -> AnalysisResult:
     row_dur = get_row_duration(DEFAULT_SPEED, DEFAULT_BPM)
     total_rows = int(math.ceil(duration / row_dur))
 
-    # Determine chunk size in rows
-    # Standard: 64 rows (1 pattern = 7.68 seconds)
-    rows_per_chunk = 64
+    # Determine chunk size in rows.
+    # To strictly avoid General Sound Z80 16-bit register overflow and clipping at 64 KB (65534 bytes),
+    # we prefer 32 rows per chunk (3.84s). At 9309 Hz, 32+1 rows = ~36.8 KB (fits comfortably under 64 KB).
+    # If duration exceeds 31 samples (~119s), we try 64 rows if safe under 64 KB.
+    GS_SAFE_SAMPLE_BYTES = 65534
+    rows_per_chunk = 32
     num_chunks = int(math.ceil(total_rows / rows_per_chunk))
 
-    # If 64 rows exceeds 31 samples, try 128 rows (if sample length permits)
+    # If 32 rows exceeds 31 samples, try 64 rows (if sample length fits 64 KB limit)
     if num_chunks > MAX_SAMPLES:
-        max_chunk_samples = int(math.ceil(128 * row_dur * rate))
-        if max_chunk_samples <= MAX_SAMPLE_LENGTH_BYTES:
-            rows_per_chunk = 128
+        max_chunk_bytes_64 = int(math.ceil(65 * row_dur * rate))
+        if max_chunk_bytes_64 <= GS_SAFE_SAMPLE_BYTES:
+            rows_per_chunk = 64
             num_chunks = int(math.ceil(total_rows / rows_per_chunk))
+        elif max_chunk_bytes_64 <= MAX_SAMPLE_LENGTH_BYTES:
+            rows_per_chunk = 64
+            num_chunks = int(math.ceil(total_rows / rows_per_chunk))
+            warnings.append(
+                f"Sample size ({max_chunk_bytes_64 / 1024:.1f} KB) exceeds General Sound 64 KB Z80 limit! "
+                f"Please reduce duration to under 119s or choose a lower sample rate."
+            )
 
     if num_chunks > MAX_SAMPLES:
         warnings.append(
@@ -374,15 +386,23 @@ def convert_audio_to_mod(
             if config.click_prevention:
                 chunk_slice = smooth_chunk_edges(chunk_slice, fade_samples=16)
 
-        # Create MOD sample
+        # Ensure word alignment and append 2 zero bytes for a 100% silent loop buffer
+        if len(chunk_slice) % 2 != 0:
+            chunk_slice = chunk_slice + b"\x00"
+        chunk_slice = chunk_slice + b"\x00\x00"
+
+        total_words = len(chunk_slice) // 2
+        silent_loop_offset = max(0, total_words - 1)
+
+        # Create MOD sample with silent loop buffer at the end
         s_name = f"PCM_CHUNK_{sample_idx:02d}"
         mod_sample = ModSample(
             name=s_name,
             data=chunk_slice,
             volume=64,
             finetune=0,
-            repeat_offset=0,
-            repeat_length=1,  # Safe non-loop for Amiga Paula
+            repeat_offset=silent_loop_offset,
+            repeat_length=1,  # Safe silent loop for Amiga Paula / General Sound
         )
         song.set_sample(sample_idx, mod_sample)
         samples_created.append(mod_sample)
@@ -422,6 +442,22 @@ def convert_audio_to_mod(
                 effect_param=0x40,  # 64 (Full volume)
             )
 
+            # If this is Pattern 0, Row 0: explicitly lock tracker speed (F06) and CIA BPM (F7D)
+            # on unused channels to guarantee 100% stable 50 Hz tick rate across all Spectrum clones!
+            if i == 0 and pattern_idx == 0 and row_in_pattern == 0:
+                current_pattern.set_cell(
+                    row=0,
+                    channel=1,
+                    effect_cmd=0x0F,  # Speed
+                    effect_param=0x06,  # 6 ticks per row
+                )
+                current_pattern.set_cell(
+                    row=0,
+                    channel=2,
+                    effect_cmd=0x0F,  # BPM
+                    effect_param=0x7D,  # 125 BPM (50.0 Hz)
+                )
+
             # 1 row later, mute the previous channel (C00) to cut off its finished overlap tail
             # and completely cease mixer processing on that channel
             if i > 0 and (row_in_pattern + 1) < ROWS_PER_PATTERN:
@@ -447,6 +483,19 @@ def convert_audio_to_mod(
                     channel=1,
                     sample_num=sample_num,
                     period=analysis.period,
+                )
+            if i == 0 and pattern_idx == 0 and row_in_pattern == 0:
+                current_pattern.set_cell(
+                    row=0,
+                    channel=2,
+                    effect_cmd=0x0F,
+                    effect_param=0x06,
+                )
+                current_pattern.set_cell(
+                    row=0,
+                    channel=3,
+                    effect_cmd=0x0F,
+                    effect_param=0x7D,
                 )
 
         # Advance by rows_for_this_sample
