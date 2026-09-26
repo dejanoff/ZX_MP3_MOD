@@ -7,8 +7,8 @@ echo ============================================================
 REM Install requirements if needed
 python -m pip install -r requirements.txt
 
-REM Build onefile standalone executable
-pyinstaller --noconfirm --clean --onefile --name "MP3toMOD" mp3tomod.py
+REM Build onefile standalone executable without console window
+pyinstaller --noconfirm --clean --onefile --noconsole --name "MP3toMOD" mp3tomod.py
 
 if %ERRORLEVEL% EQU 0 (
     echo.

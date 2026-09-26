@@ -185,7 +185,7 @@ build.bat
 
 Или вручную через терминал:
 ```bash
-pyinstaller --noconfirm --clean --onefile --name "MP3toMOD" mp3tomod.py
+pyinstaller --noconfirm --clean --onefile --noconsole --name "MP3toMOD" mp3tomod.py
 ```
 
 Готовый файл появится в папке `dist\MP3toMOD.exe`. Он не требует установленного Python и готов к распространению.
