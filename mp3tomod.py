@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Root launcher for MP3 to ProTracker MOD converter (ZX Spectrum General Sound).
 
-Version: 1.1.0
+Version: 1.2.0
 """
 
 import sys

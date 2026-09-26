@@ -7,6 +7,7 @@ No external GUI dependencies required.
 import os
 import sys
 import json
+import math
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -16,7 +17,7 @@ from typing import Optional
 from .version import __version__
 from .protracker import QUALITY_PRESETS, period_to_frequency
 from .audio import find_ffmpeg, parse_time_str, format_time_str, probe_audio_file
-from .mod_writer import generate_output_mod_path, sanitize_latin_filename
+from .mod_writer import generate_output_mod_path, sanitize_latin_filename, to_ascii_safe
 from .converter import (
     ConversionConfig,
     AnalysisResult,
@@ -63,13 +64,17 @@ class ModConverterGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(f"ZX Spectrum MP3 to ProTracker MOD Converter (General Sound) v{__version__}")
-        self.root.geometry("740x700")
-        self.root.minsize(640, 600)
+        self.root.geometry("760x720")
+        self.root.minsize(660, 600)
 
         # Load persistent configuration
         self.config_data = load_config()
-        self.last_input_dir = self.config_data.get("last_input_dir", "")
-        self.last_output_dir = self.config_data.get("last_output_dir", "")
+        self.last_input_dir = os.path.normpath(self.config_data.get("last_input_dir", "")) if self.config_data.get("last_input_dir") else ""
+        self.last_output_dir = os.path.normpath(self.config_data.get("last_output_dir", "")) if self.config_data.get("last_output_dir") else ""
+
+        self.total_audio_duration = 300.0
+        self._updating_widgets = False
+        self._title_user_edited = False
 
         # Style configuration
         self.style = ttk.Style()
@@ -87,7 +92,7 @@ class ModConverterGUI:
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         # --- 1. File Selection Frame ---
-        file_frame = ttk.LabelFrame(main_frame, text=" Audio Files ", padding="8 8 8 8")
+        file_frame = ttk.LabelFrame(main_frame, text=" Audio Files & Song Title ", padding="8 8 8 8")
         file_frame.pack(fill=tk.X, pady=(0, 8))
 
         # Input file
@@ -106,25 +111,68 @@ class ModConverterGUI:
         ttk.Button(btn_box, text="Browse File...", command=self._browse_output).pack(side=tk.LEFT, padx=(0, 3))
         ttk.Button(btn_box, text="Folder...", command=self._browse_output_dir).pack(side=tk.LEFT)
 
+        # Song Title (MOD Header, max 20 chars, displayed in Wild Player)
+        ttk.Label(file_frame, text="Song Title:").grid(row=2, column=0, sticky=tk.W, pady=3)
+        self.title_var = tk.StringVar(value="")
+        self.title_var.trace_add("write", self._on_title_var_changed)
+
+        self.title_entry = ttk.Entry(file_frame, textvariable=self.title_var)
+        self.title_entry.grid(row=2, column=1, sticky=tk.EW, padx=(5, 5), pady=3)
+        self.title_entry.bind("<Key>", lambda e: setattr(self, "_title_user_edited", True))
+
+        self.title_count_label = ttk.Label(file_frame, text="0 / 20 chars (in player)", foreground="#555555")
+        self.title_count_label.grid(row=2, column=2, sticky=tk.W, padx=(5, 0), pady=3)
+
         file_frame.columnconfigure(1, weight=1)
 
         # --- 2. Conversion Settings Frame ---
         settings_frame = ttk.LabelFrame(main_frame, text=" Conversion Settings ", padding="8 8 8 8")
         settings_frame.pack(fill=tk.X, pady=(0, 8))
 
-        # Start position
+        # Start position with Slider
         ttk.Label(settings_frame, text="Start Position:").grid(row=0, column=0, sticky=tk.W, pady=4)
-        self.start_entry = ttk.Entry(settings_frame, width=12)
-        self.start_entry.insert(0, "00:00")
-        self.start_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=4)
-        ttk.Label(settings_frame, text="(e.g. 00:45 or 45 sec)").grid(row=0, column=2, sticky=tk.W, pady=4)
+        start_box = ttk.Frame(settings_frame)
+        start_box.grid(row=0, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=4)
 
-        # Duration
+        self.start_entry = ttk.Entry(start_box, width=8)
+        self.start_entry.insert(0, "00:00")
+        self.start_entry.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.start_scale = ttk.Scale(
+            start_box,
+            orient=tk.HORIZONTAL,
+            from_=0,
+            to=300,
+            command=self._on_start_slider_move,
+        )
+        self.start_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.start_scale.bind("<ButtonRelease-1>", self._on_start_slider_release)
+
+        self.start_max_label = ttk.Label(start_box, text="(max: 05:00)", width=14)
+        self.start_max_label.pack(side=tk.LEFT)
+
+        # Duration with Slider
         ttk.Label(settings_frame, text="Duration:").grid(row=1, column=0, sticky=tk.W, pady=4)
-        self.duration_entry = ttk.Entry(settings_frame, width=12)
+        dur_box = ttk.Frame(settings_frame)
+        dur_box.grid(row=1, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=4)
+
+        self.duration_entry = ttk.Entry(dur_box, width=8)
         self.duration_entry.insert(0, "60")
-        self.duration_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=4)
-        ttk.Label(settings_frame, text="seconds (e.g. 10, 30, 60, 90)").grid(row=1, column=2, sticky=tk.W, pady=4)
+        self.duration_entry.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.duration_scale = ttk.Scale(
+            dur_box,
+            orient=tk.HORIZONTAL,
+            from_=1,
+            to=240,
+            command=self._on_duration_slider_move,
+        )
+        self.duration_scale.set(60)
+        self.duration_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.duration_scale.bind("<ButtonRelease-1>", self._on_duration_slider_release)
+
+        self.duration_max_label = ttk.Label(dur_box, text="sec (max: 240s)", width=14)
+        self.duration_max_label.pack(side=tk.LEFT)
 
         # Quality Preset
         ttk.Label(settings_frame, text="Quality:").grid(row=2, column=0, sticky=tk.W, pady=4)
@@ -144,19 +192,21 @@ class ModConverterGUI:
             width=38,
         )
         self.quality_combo.current(0)  # OPTIMAL
-        self.quality_combo.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=5, pady=4)
+        self.quality_combo.grid(row=2, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=4)
 
         # GS Memory Target
         ttk.Label(settings_frame, text="GS Memory:").grid(row=3, column=0, sticky=tk.W, pady=4)
+        mem_box = ttk.Frame(settings_frame)
+        mem_box.grid(row=3, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=4)
         self.memory_combo = ttk.Combobox(
-            settings_frame,
+            mem_box,
             values=["1 MB", "512 KB", "2 MB", "4 MB", "Unlimited"],
             state="readonly",
             width=15,
         )
         self.memory_combo.current(0)  # 1 MB
-        self.memory_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=4)
-        ttk.Label(settings_frame, text="(General Sound RAM target)").grid(row=3, column=2, sticky=tk.W, pady=4)
+        self.memory_combo.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(mem_box, text="(General Sound RAM target)").pack(side=tk.LEFT)
 
         # Output Mode
         ttk.Label(settings_frame, text="Output Mode:").grid(row=4, column=0, sticky=tk.W, pady=4)
@@ -171,7 +221,7 @@ class ModConverterGUI:
             width=44,
         )
         self.mode_combo.current(0)  # SEAMLESS PING-PONG
-        self.mode_combo.grid(row=4, column=1, columnspan=2, sticky=tk.W, padx=5, pady=4)
+        self.mode_combo.grid(row=4, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=4)
 
         # Stereo Downmix
         ttk.Label(settings_frame, text="Stereo Downmix:").grid(row=5, column=0, sticky=tk.W, pady=4)
@@ -186,7 +236,7 @@ class ModConverterGUI:
             width=38,
         )
         self.downmix_combo.current(0)  # Mix Stereo
-        self.downmix_combo.grid(row=5, column=1, columnspan=2, sticky=tk.W, padx=5, pady=4)
+        self.downmix_combo.grid(row=5, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=4)
 
         # Anti-click edge smoothing
         self.smooth_var = tk.BooleanVar(value=True)
@@ -197,15 +247,23 @@ class ModConverterGUI:
         )
         self.smooth_check.grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(6, 2))
 
+        settings_frame.columnconfigure(1, weight=1)
+
         # Dynamic bindings to auto-update filename, analysis and config
         self.quality_combo.bind("<<ComboboxSelected>>", lambda e: self._on_setting_changed())
         self.mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_setting_changed())
         self.downmix_combo.bind("<<ComboboxSelected>>", lambda e: self._on_setting_changed())
         self.memory_combo.bind("<<ComboboxSelected>>", lambda e: self._on_setting_changed())
-        self.duration_entry.bind("<FocusOut>", lambda e: self._on_setting_changed())
-        self.duration_entry.bind("<Return>", lambda e: self._on_setting_changed())
-        self.start_entry.bind("<FocusOut>", lambda e: self._on_setting_changed())
-        self.start_entry.bind("<Return>", lambda e: self._on_setting_changed())
+        self.duration_entry.bind("<FocusOut>", self._on_duration_entry_changed)
+        self.duration_entry.bind("<Return>", self._on_duration_entry_changed)
+        self.start_entry.bind("<FocusOut>", self._on_start_entry_changed)
+        self.start_entry.bind("<Return>", self._on_start_entry_changed)
+        self.input_entry.bind("<FocusOut>", self._on_input_entry_changed)
+        self.input_entry.bind("<Return>", self._on_input_entry_changed)
+        self.output_entry.bind("<FocusOut>", self._on_output_entry_changed)
+        self.output_entry.bind("<Return>", self._on_output_entry_changed)
+        self.title_entry.bind("<FocusOut>", lambda e: self._on_setting_changed())
+        self.title_entry.bind("<Return>", lambda e: self._on_setting_changed())
 
         # --- 3. Action Buttons & Analysis Summary ---
         action_frame = ttk.Frame(main_frame)
@@ -278,6 +336,102 @@ class ModConverterGUI:
         self.log_text.insert(tk.END, msg + "\n")
         self.log_text.see(tk.END)
 
+    def _on_title_var_changed(self, *args):
+        val = self.title_var.get()
+        if len(val) > 20:
+            self.title_var.set(val[:20])
+            val = self.title_var.get()
+        self.title_count_label.config(text=f"{len(val)} / 20 chars (in player)")
+
+    def _on_start_slider_move(self, val):
+        if self._updating_widgets:
+            return
+        sec = int(round(float(val)))
+        self._updating_widgets = True
+        try:
+            self.start_entry.delete(0, tk.END)
+            self.start_entry.insert(0, format_time_str(sec))
+        finally:
+            self._updating_widgets = False
+
+    def _on_start_slider_release(self, event=None):
+        self._on_setting_changed()
+
+    def _on_start_entry_changed(self, event=None):
+        if self._updating_widgets:
+            return
+        try:
+            sec = parse_time_str(self.start_entry.get())
+        except Exception:
+            sec = 0.0
+        sec = max(0.0, sec)
+        max_limit = float(self.start_scale.cget("to"))
+        if sec > max_limit:
+            self.start_scale.config(to=max(sec, self.total_audio_duration))
+            self.start_max_label.config(text=f"(max: {format_time_str(self.start_scale.cget('to'))})")
+        self._updating_widgets = True
+        try:
+            self.start_scale.set(sec)
+        finally:
+            self._updating_widgets = False
+        self._on_setting_changed()
+
+    def _on_duration_slider_move(self, val):
+        if self._updating_widgets:
+            return
+        sec = max(1, int(round(float(val))))
+        self._updating_widgets = True
+        try:
+            self.duration_entry.delete(0, tk.END)
+            self.duration_entry.insert(0, str(sec))
+        finally:
+            self._updating_widgets = False
+
+    def _on_duration_slider_release(self, event=None):
+        self._on_setting_changed()
+
+    def _on_duration_entry_changed(self, event=None):
+        if self._updating_widgets:
+            return
+        try:
+            sec = parse_time_str(self.duration_entry.get())
+        except Exception:
+            sec = 60.0
+        sec = max(1.0, sec)
+        max_limit = float(self.duration_scale.cget("to"))
+        if sec > max_limit:
+            self.duration_scale.config(to=max(sec, self.total_audio_duration))
+            self.duration_max_label.config(text=f"sec (max: {int(self.duration_scale.cget('to'))}s)")
+        self._updating_widgets = True
+        try:
+            self.duration_scale.set(sec)
+        finally:
+            self._updating_widgets = False
+        self._on_setting_changed()
+
+    def _on_input_entry_changed(self, event=None):
+        val = self.input_entry.get().strip()
+        if val:
+            norm = os.path.normpath(val)
+            if norm != val:
+                self.input_entry.delete(0, tk.END)
+                self.input_entry.insert(0, norm)
+            if not self._title_user_edited and not self.title_var.get().strip():
+                base_name = os.path.splitext(os.path.basename(norm))[0]
+                self.title_var.set(to_ascii_safe(base_name)[:20].strip())
+            self._auto_update_output_path()
+            if os.path.isfile(norm):
+                self._probe_file(norm)
+            self._on_setting_changed()
+
+    def _on_output_entry_changed(self, event=None):
+        val = self.output_entry.get().strip()
+        if val:
+            norm = os.path.normpath(val)
+            if norm != val:
+                self.output_entry.delete(0, tk.END)
+                self.output_entry.insert(0, norm)
+
     def _restore_settings(self):
         """Restore previous settings from config."""
         c = self.config_data
@@ -305,8 +459,24 @@ class ModConverterGUI:
         if "duration" in c:
             self.duration_entry.delete(0, tk.END)
             self.duration_entry.insert(0, str(c["duration"]))
+            try:
+                d_val = float(c["duration"])
+                self.duration_scale.set(d_val)
+            except Exception:
+                pass
+        if "start" in c:
+            self.start_entry.delete(0, tk.END)
+            self.start_entry.insert(0, str(c["start"]))
+            try:
+                s_val = parse_time_str(c["start"])
+                self.start_scale.set(s_val)
+            except Exception:
+                pass
         if "smooth" in c:
             self.smooth_var.set(bool(c["smooth"]))
+        if "title" in c and c["title"]:
+            self.title_var.set(c["title"])
+            self._title_user_edited = True
 
     def _save_state(self):
         """Save current folder and options to config."""
@@ -318,13 +488,15 @@ class ModConverterGUI:
             "mode": self.mode_combo.get(),
             "downmix": self.downmix_combo.get(),
             "duration": self.duration_entry.get().strip(),
+            "start": self.start_entry.get().strip(),
+            "title": self.title_var.get().strip(),
             "smooth": self.smooth_var.get(),
         }
         self.config_data = cfg
         save_config(cfg)
 
     def _on_setting_changed(self):
-        """Called when quality, duration, or mode changes."""
+        """Called when quality, duration, mode, start or title changes."""
         self._auto_update_output_path()
         self._on_analyze()
         self._save_state()
@@ -334,6 +506,7 @@ class ModConverterGUI:
         inp = self.input_entry.get().strip()
         if not inp:
             return
+        inp = os.path.normpath(inp)
 
         # Resolve playback rate
         q_raw = self.quality_combo.get().strip().upper()
@@ -374,15 +547,15 @@ class ModConverterGUI:
         elif self.last_input_dir and os.path.isdir(self.last_input_dir):
             out_dir = self.last_input_dir
         else:
-            out_dir = os.path.dirname(os.path.abspath(inp))
+            out_dir = os.path.dirname(inp)
 
-        new_mod_path = generate_output_mod_path(
+        new_mod_path = os.path.normpath(generate_output_mod_path(
             input_path=inp,
             output_dir=out_dir,
             sample_rate=rate,
             output_mode=out_mode,
             duration_sec=dur,
-        )
+        ))
         self.output_entry.delete(0, tk.END)
         self.output_entry.insert(0, new_mod_path)
 
@@ -402,10 +575,18 @@ class ModConverterGUI:
             ],
         )
         if f:
-            self.last_input_dir = os.path.dirname(os.path.abspath(f))
+            f = os.path.normpath(f)
+            self.last_input_dir = os.path.normpath(os.path.dirname(f))
             self._save_state()
             self.input_entry.delete(0, tk.END)
             self.input_entry.insert(0, f)
+
+            # Auto-populate title if not manually edited by user
+            base_name = os.path.splitext(os.path.basename(f))[0]
+            if not self._title_user_edited:
+                auto_title = to_ascii_safe(base_name)[:20].strip()
+                self.title_var.set(auto_title)
+                self._title_user_edited = False
 
             # Auto-generate Latin output filename with settings
             self._auto_update_output_path()
@@ -426,7 +607,8 @@ class ModConverterGUI:
             filetypes=[("ProTracker MOD File", "*.mod"), ("All Files", "*.*")],
         )
         if f:
-            self.last_output_dir = os.path.dirname(os.path.abspath(f))
+            f = os.path.normpath(f)
+            self.last_output_dir = os.path.normpath(os.path.dirname(f))
             self._save_state()
             self.output_entry.delete(0, tk.END)
             self.output_entry.insert(0, f)
@@ -438,7 +620,7 @@ class ModConverterGUI:
             initialdir=init_dir,
         )
         if d:
-            self.last_output_dir = os.path.abspath(d)
+            self.last_output_dir = os.path.normpath(d)
             self._save_state()
             self._auto_update_output_path()
             self._log(f"Export folder set to: {self.last_output_dir}")
@@ -448,19 +630,34 @@ class ModConverterGUI:
             info = probe_audio_file(filepath)
             dur = info.get("duration", 0.0)
             if dur > 0:
+                self.total_audio_duration = dur
                 self._log(f"Loaded '{os.path.basename(filepath)}': Total Duration = {format_time_str(dur)} ({dur:.1f}s)")
+
+                # Update slider max ranges
+                max_sec = max(10.0, math.ceil(dur))
+                self.start_scale.config(to=max_sec)
+                self.start_max_label.config(text=f"(max: {format_time_str(max_sec)})")
+
+                self.duration_scale.config(to=max_sec)
+                self.duration_max_label.config(text=f"sec (max: {int(max_sec)}s)")
+
                 # If current duration exceeds file duration, adjust it
                 curr_dur = parse_time_str(self.duration_entry.get())
                 if curr_dur > dur:
-                    self.duration_entry.delete(0, tk.END)
-                    self.duration_entry.insert(0, str(int(dur)))
+                    self._updating_widgets = True
+                    try:
+                        self.duration_entry.delete(0, tk.END)
+                        self.duration_entry.insert(0, str(int(dur)))
+                        self.duration_scale.set(int(dur))
+                    finally:
+                        self._updating_widgets = False
             self._on_analyze()
         except Exception as e:
             self._log(f"Probe notice: {e}")
 
     def _build_config(self) -> ConversionConfig:
-        inp = self.input_entry.get().strip()
-        outp = self.output_entry.get().strip()
+        inp = os.path.normpath(self.input_entry.get().strip()) if self.input_entry.get().strip() else ""
+        outp = os.path.normpath(self.output_entry.get().strip()) if self.output_entry.get().strip() else ""
         if not outp:
             if inp:
                 base, _ = os.path.splitext(inp)
@@ -512,7 +709,12 @@ class ModConverterGUI:
 
         smooth = self.smooth_var.get()
 
-        song_title = os.path.splitext(os.path.basename(outp))[0][:20]
+        # Song Title from editable field, fallback to sanitized file basename
+        user_title = self.title_var.get().strip()
+        if user_title:
+            song_title = to_ascii_safe(user_title)[:20]
+        else:
+            song_title = to_ascii_safe(os.path.splitext(os.path.basename(outp))[0])[:20]
 
         return ConversionConfig(
             input_path=inp,
@@ -536,8 +738,8 @@ class ModConverterGUI:
             mem_fit_txt = "OK (Fits within GS RAM)" if res.fits_memory else "EXCEEDS GS RAM TARGET!"
 
             summary_text = (
-                f"Selected: {format_time_str(config.start_sec)} -> {format_time_str(config.start_sec + res.duration_sec)} "
-                f"({res.duration_sec:.1f}s) | Target Note: {res.note_name} (Period {res.period}, {res.sample_rate} Hz)\n"
+                f"Title: \"{config.title}\" | Selected: {format_time_str(config.start_sec)} -> {format_time_str(config.start_sec + res.duration_sec)} "
+                f"({res.duration_sec:.1f}s) | Rate: {res.sample_rate} Hz (Note {res.note_name})\n"
                 f"Samples required: {res.samples_required} / 31 | Patterns: {res.patterns_required} | "
                 f"PCM Size: {res.total_pcm_bytes / 1024:.1f} KB | Est. MOD: {res.estimated_mod_bytes / 1024:.1f} KB\n"
                 f"Memory Target: {config.memory_target} -> {mem_fit_txt}"
